@@ -1,0 +1,8 @@
+DATABASE_URL=postgresql://user:pass@ep-xxx.us-east-2.aws.neon.tech/rgba?sslmode=require
+BETTER_AUTH_SECRET=your-random-32-character-secret-here
+API_BASE_URL=http://localhost:3007
+ACCOUNT_APP_URL=http://localhost:3005
+STUDIO_APP_URL=http://localhost:3006
+COOKIE_DOMAIN=
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=

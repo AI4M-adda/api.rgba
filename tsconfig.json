@@ -10,6 +10,9 @@
     ],
     "types": ["vite/client"],
     "jsx": "react-jsx",
-    "jsxImportSource": "hono/jsx"
+    "jsxImportSource": "hono/jsx",
+    "noEmit": true
   },
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "exclude": ["node_modules", "dist", "vite.config.ts"]
 }
