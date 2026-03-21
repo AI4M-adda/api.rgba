@@ -3,7 +3,8 @@ import { createDb } from "@rgba/db"
 import { createAuth } from "./auth"
 import { createCorsMiddleware } from "./middleware/cors"
 import { sessionMiddleware } from "./middleware/session"
-import { createRpcRoutes } from "./routes"
+import { userRoutes } from "./routes/user"
+import { memoRoutes } from "./routes/studio/memo"
 
 type Env = {
   Bindings: {
@@ -24,6 +25,13 @@ function getTrustedOrigins(c: { env: Env["Bindings"] }): string[] {
   return [c.env.ACCOUNT_APP_URL, c.env.STUDIO_APP_URL].filter(Boolean)
 }
 
+// Request logging (dev only)
+app.use("*", async (c, next) => {
+  console.log(`[api] ${c.req.method} ${c.req.path}`)
+  await next()
+  console.log(`[api] ${c.req.method} ${c.req.path} → ${c.res.status}`)
+})
+
 // Global CORS — handles OPTIONS preflight for all routes
 app.use("*", async (c, next) => {
   const corsMiddleware = createCorsMiddleware(getTrustedOrigins(c))
@@ -43,7 +51,7 @@ app.all("/api/auth/**", async (c) => {
       c.header("Access-Control-Allow-Origin", origin)
       c.header("Access-Control-Allow-Credentials", "true")
     }
-    c.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
+    c.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
     c.header("Access-Control-Allow-Headers", "Content-Type,Authorization")
     c.header("Access-Control-Max-Age", "86400")
     c.header("Vary", "Origin")
@@ -74,6 +82,11 @@ app.all("/api/auth/**", async (c) => {
 
 // Session middleware for protected RPC routes
 app.use("/api/rpc/*", async (c, next) => {
+  const cookie = c.req.header("cookie") ?? ""
+  if (!cookie) {
+    return c.json({ error: "Unauthorized" }, 401)
+  }
+
   const db = createDb(c.env.DATABASE_URL)
   const auth = createAuth({
     db,
@@ -88,22 +101,26 @@ app.use("/api/rpc/*", async (c, next) => {
   return sessionMiddleware(auth)(c, next)
 })
 
-// Mount RPC routes
-const rpcRoutes = createRpcRoutes()
-app.route("/api/rpc", rpcRoutes)
-
-// Debug endpoint — verify env vars (remove in production)
-app.get("/debug/cors", (c) => {
-  return c.json({
-    ACCOUNT_APP_URL: c.env.ACCOUNT_APP_URL ?? "NOT SET",
-    STUDIO_APP_URL: c.env.STUDIO_APP_URL ?? "NOT SET",
-    API_BASE_URL: c.env.API_BASE_URL ?? "NOT SET",
-  })
-})
+// Mount RPC routes directly (avoid double-nested .route() path issues)
+app.get("/api/rpc/ping", (c) => c.json({ pong: true }))
+app.route("/api/rpc/user", userRoutes)
+app.route("/api/rpc/memo", memoRoutes)
 
 // Health check
 app.get("/", (c) => {
   return c.json({ status: "ok", service: "api.rgba" })
+})
+
+// Global error handler
+app.onError((err, c) => {
+  console.error(`[api] Error on ${c.req.method} ${c.req.path}:`, err.message, err.stack)
+  return c.json({ error: err.message, path: c.req.path }, 500)
+})
+
+// Not found handler — log the path for debugging
+app.notFound((c) => {
+  console.error(`[api] 404 Not Found: ${c.req.method} ${c.req.path}`)
+  return c.json({ error: "Not Found", path: c.req.path, method: c.req.method }, 404)
 })
 
 export default app

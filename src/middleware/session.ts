@@ -11,7 +11,7 @@ type AuthInstance = {
 export function sessionMiddleware(auth: AuthInstance): MiddlewareHandler {
   return async (c, next) => {
     const session = await auth.api.getSession({
-      headers: c.req.raw.headers,
+      headers: new Headers({ cookie: c.req.header("cookie") ?? "" }),
     })
 
     if (!session) {
