@@ -1,7 +1,7 @@
 import { Hono } from "hono"
 import { createDb } from "@rgba/db"
 import { memos } from "@rgba/db/schema"
-import { eq, and, desc, like } from "drizzle-orm"
+import { eq, and, desc, like, sql } from "drizzle-orm"
 
 type Env = {
   Bindings: {
@@ -66,13 +66,14 @@ memoRoutes.get("/:id", async (c) => {
   return c.json({ memo })
 })
 
-// Create memo (voice or text)
+// Create memo (voice or text) — returns txid for Electric sync confirmation
 memoRoutes.post("/", async (c) => {
   const user = c.get("user")
   const db = createDb(c.env.DATABASE_URL)
   const body = await c.req.json()
 
-  const { title, type, content, duration, fileSize } = body as {
+  const { id, title, type, content, duration, fileSize } = body as {
+    id?: string
     title: string
     type: "voice" | "text"
     content?: string
@@ -84,23 +85,30 @@ memoRoutes.post("/", async (c) => {
     return c.json({ error: "Title and type are required" }, 400)
   }
 
-  const [memo] = await db
-    .insert(memos)
-    .values({
-      userId: user.id,
-      title,
-      type,
-      content: type === "text" ? (content ?? "") : null,
-      duration: type === "voice" ? duration : null,
-      fileSize: type === "voice" ? fileSize : null,
-      status: type === "text" ? "done" : "recorded",
-    })
-    .returning()
+  const batchResult = await db.batch([
+    db
+      .insert(memos)
+      .values({
+        ...(id ? { id } : {}),
+        userId: user.id,
+        title,
+        type,
+        content: type === "text" ? (content ?? "") : null,
+        duration: type === "voice" ? duration : null,
+        fileSize: type === "voice" ? fileSize : null,
+        status: type === "text" ? "done" : "recorded",
+      })
+      .returning(),
+    db.execute(sql`SELECT txid_current()::text AS txid`),
+  ])
 
-  return c.json({ memo }, 201)
+  const [memo] = batchResult[0]
+  const txid = Number((batchResult[1] as unknown as { rows: { txid: string }[] }).rows[0]?.txid)
+
+  return c.json({ memo, txid }, 201)
 })
 
-// Update memo
+// Update memo — returns txid for Electric sync confirmation
 memoRoutes.patch("/:id", async (c) => {
   const user = c.get("user")
   const db = createDb(c.env.DATABASE_URL)
@@ -118,35 +126,47 @@ memoRoutes.patch("/:id", async (c) => {
   if (content !== undefined) updates.content = content
   if (transcript !== undefined) updates.transcript = transcript
 
-  const [memo] = await db
-    .update(memos)
-    .set(updates)
-    .where(and(eq(memos.id, id), eq(memos.userId, user.id)))
-    .returning()
+  const batchResult = await db.batch([
+    db
+      .update(memos)
+      .set(updates)
+      .where(and(eq(memos.id, id), eq(memos.userId, user.id)))
+      .returning(),
+    db.execute(sql`SELECT txid_current()::text AS txid`),
+  ])
 
+  const [memo] = batchResult[0]
   if (!memo) {
     return c.json({ error: "Memo not found" }, 404)
   }
 
-  return c.json({ memo })
+  const txid = Number((batchResult[1] as unknown as { rows: { txid: string }[] }).rows[0]?.txid)
+
+  return c.json({ memo, txid })
 })
 
-// Delete memo
+// Delete memo — returns txid for Electric sync confirmation
 memoRoutes.delete("/:id", async (c) => {
   const user = c.get("user")
   const db = createDb(c.env.DATABASE_URL)
   const id = c.req.param("id")
 
-  const [memo] = await db
-    .delete(memos)
-    .where(and(eq(memos.id, id), eq(memos.userId, user.id)))
-    .returning()
+  const batchResult = await db.batch([
+    db
+      .delete(memos)
+      .where(and(eq(memos.id, id), eq(memos.userId, user.id)))
+      .returning(),
+    db.execute(sql`SELECT txid_current()::text AS txid`),
+  ])
 
+  const [memo] = batchResult[0]
   if (!memo) {
     return c.json({ error: "Memo not found" }, 404)
   }
 
-  return c.json({ success: true })
+  const txid = Number((batchResult[1] as unknown as { rows: { txid: string }[] }).rows[0]?.txid)
+
+  return c.json({ success: true, txid })
 })
 
 // Upload audio file (placeholder — store as base64 or integrate R2 later)

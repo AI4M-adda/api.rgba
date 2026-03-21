@@ -5,6 +5,10 @@ import { createCorsMiddleware } from "./middleware/cors"
 import { sessionMiddleware } from "./middleware/session"
 import { userRoutes } from "./routes/user"
 import { memoRoutes } from "./routes/studio/memo"
+import { electricProxy } from "./routes/studio/electric-proxy"
+import { marketRoutes } from "./routes/market"
+import { watchlistRoutes } from "./routes/trading/watchlist"
+import { marketPreferencesRoutes } from "./routes/trading/market-preferences"
 
 type Env = {
   Bindings: {
@@ -16,13 +20,20 @@ type Env = {
     COOKIE_DOMAIN?: string
     GOOGLE_CLIENT_ID?: string
     GOOGLE_CLIENT_SECRET?: string
+    ELECTRIC_URL?: string
+    ELECTRIC_ID?: string
+    ELECTRIC_SECRET?: string
+    TRADING_APP_URL?: string
+    MSTOCK_API_KEY: string
+    MSTOCK_API_SECRET: string
+    MSTOCK_TOTP_SECRET?: string
   }
 }
 
 const app = new Hono<Env>()
 
 function getTrustedOrigins(c: { env: Env["Bindings"] }): string[] {
-  return [c.env.ACCOUNT_APP_URL, c.env.STUDIO_APP_URL].filter(Boolean)
+  return [c.env.ACCOUNT_APP_URL, c.env.STUDIO_APP_URL, c.env.TRADING_APP_URL].filter((v): v is string => Boolean(v))
 }
 
 // Request logging (dev only)
@@ -80,8 +91,29 @@ app.all("/api/auth/**", async (c) => {
   return response
 })
 
-// Session middleware for protected RPC routes
+// Session middleware for protected routes (RPC + shapes)
 app.use("/api/rpc/*", async (c, next) => {
+  const cookie = c.req.header("cookie") ?? ""
+  if (!cookie) {
+    return c.json({ error: "Unauthorized" }, 401)
+  }
+
+  const db = createDb(c.env.DATABASE_URL)
+  const auth = createAuth({
+    db,
+    baseURL: c.env.API_BASE_URL,
+    secret: c.env.BETTER_AUTH_SECRET,
+    trustedOrigins: getTrustedOrigins(c),
+    cookieDomain: c.env.COOKIE_DOMAIN,
+    googleClientId: c.env.GOOGLE_CLIENT_ID,
+    googleClientSecret: c.env.GOOGLE_CLIENT_SECRET,
+    accountAppUrl: c.env.ACCOUNT_APP_URL,
+  })
+  return sessionMiddleware(auth)(c, next)
+})
+
+// Session middleware for Electric shape proxy
+app.use("/api/shapes/*", async (c, next) => {
   const cookie = c.req.header("cookie") ?? ""
   if (!cookie) {
     return c.json({ error: "Unauthorized" }, 401)
@@ -105,6 +137,12 @@ app.use("/api/rpc/*", async (c, next) => {
 app.get("/api/rpc/ping", (c) => c.json({ pong: true }))
 app.route("/api/rpc/user", userRoutes)
 app.route("/api/rpc/memo", memoRoutes)
+app.route("/api/rpc/market", marketRoutes)
+app.route("/api/rpc/watchlist", watchlistRoutes)
+app.route("/api/rpc/market-preferences", marketPreferencesRoutes)
+
+// Mount Electric shape proxy (authenticated)
+app.route("/api/shapes", electricProxy)
 
 // Health check
 app.get("/", (c) => {
